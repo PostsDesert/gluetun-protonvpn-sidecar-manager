@@ -10,7 +10,7 @@ dependencies = [
     "pyopenssl",
     "distro",
     "dnspython",
-    "urllib3<2",
+    "urllib3<3",
     "proton-client @ git+https://github.com/ProtonMail/proton-python-client.git@0.7.1"
 ]
 
@@ -23,5 +23,5 @@ dependencies = [
     "bcrypt",
     "pyopenssl",
     "distro",
-    "urllib3<2"
+    "urllib3<3"
 ]
