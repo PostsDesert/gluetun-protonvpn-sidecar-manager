@@ -8,6 +8,7 @@ go-manager/manager
 
 # Environment variables
 .env
+docker-compose.yml
 
 # IDEs
 .vscode/

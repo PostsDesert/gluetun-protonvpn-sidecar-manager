@@ -17,8 +17,6 @@ import (
 
 // Constants
 const (
-	gluetunContainer    = "gluetun"
-	envFile             = "/project/.env"
 	defaultCheckInt     = 300
 	defaultHealthInt    = 60
 	defaultLoadCheckInt = 900
@@ -38,6 +36,11 @@ var (
 	checkInterval      int
 	healthCheckInterval int
 	loadCheckInterval  int
+
+	// Docker Configuration
+	gluetunService   string
+	gluetunContainer string
+	envFile          string
 )
 
 // VPN Server Structs (matching Proton API JSON)
@@ -95,6 +98,11 @@ func init() {
 	checkInterval = getEnvInt("CHECK_INTERVAL", defaultCheckInt)
 	healthCheckInterval = getEnvInt("HEALTH_CHECK_INTERVAL", defaultHealthInt)
 	loadCheckInterval = getEnvInt("LOAD_CHECK_INTERVAL", defaultLoadCheckInt)
+
+	// Docker Config
+	gluetunService = getEnv("GLUETUN_SERVICE_NAME", "gluetun")
+	gluetunContainer = getEnv("GLUETUN_CONTAINER_NAME", "gluetun")
+	envFile = getEnv("ENV_FILE_PATH", "/project/.env")
 }
 
 func main() {
@@ -518,6 +526,7 @@ func findBestServer(servers []LogicalServer, currentName string) (*LogicalServer
 }
 
 func checkConnectivity() bool {
+	// Use gluetunContainer (name) for docker exec
 	cmd := exec.Command("docker", "exec", "-i", gluetunContainer, "ping", "-c", "3", "-W", "2", pingTarget)
 	if err := cmd.Run(); err != nil {
 		return false
@@ -608,16 +617,17 @@ func updateEnv(server *LogicalServer) bool {
 func restartGluetun() {
 	log("Recreating Gluetun...")
 	
-	cmdArgs := []string{"up", "-d", "--force-recreate", gluetunContainer}
+	// Use gluetunService for docker-compose up
+	cmdArgs := []string{"up", "-d", "--force-recreate", gluetunService}
 	cmd := exec.Command("docker-compose", cmdArgs...)
 	
 	if _, err := os.Stat("/project/docker-compose.yml"); err == nil {
-		cmd = exec.Command("docker-compose", "-f", "/project/docker-compose.yml", "up", "-d", "--force-recreate", gluetunContainer)
+		cmd = exec.Command("docker-compose", "-f", "/project/docker-compose.yml", "up", "-d", "--force-recreate", gluetunService)
 	}
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log(fmt.Sprintf("Failed to recreate gluetun: %v\nOutput: %s", err, string(output)))
-		// Fallback
+		// Fallback - Use gluetunContainer for direct docker restart
 		exec.Command("docker", "restart", gluetunContainer).Run()
 	}
 }

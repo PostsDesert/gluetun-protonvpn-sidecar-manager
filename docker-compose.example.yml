@@ -2,16 +2,16 @@ services:
   # 0. Network Anchor (Holds the namespace and ports)
   network-anchor:
     image: alpine:latest
-    container_name: proton-network-anchor
+    container_name: ${VPN_INSTANCE_NAME:-proton}-network-anchor
     command: tail -f /dev/null
     ports:
-      - 8000:8000/tcp # Gluetun Control
+      - ${ANCHOR_PORT:-0}:8000/tcp # Gluetun Control
     restart: always
 
   # 1. The Gateway (Gluetun + ProtonVPN)
   gluetun:
     image: qmcgaw/gluetun
-    container_name: gluetun
+    container_name: ${VPN_INSTANCE_NAME:-proton}-gluetun
     network_mode: service:network-anchor
     depends_on:
       - network-anchor
@@ -20,7 +20,7 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     env_file:
-      - .env
+      - ${ENV_FILE_NAME:-.env}
     environment:
       # Provider Config - Switched to CUSTOM to use IP/Key directly
       - VPN_SERVICE_PROVIDER=custom
@@ -45,7 +45,6 @@ services:
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       
       # IMPORTANT: Force safe MTU to prevent connection instability
-      - WIREGUARD_MTU=1280
     volumes:
       - gluetun-data:/gluetun
     restart: always
@@ -53,7 +52,7 @@ services:
   # 2. The Exit Node (Tailscale + Headscale)
   tailscale-vpn:
     image: tailscale/tailscale:latest
-    container_name: tailscale-proton-exit
+    container_name: ${VPN_INSTANCE_NAME:-proton}-exit-node
     network_mode: service:network-anchor # Routes all traffic through Anchor
     depends_on:
       - network-anchor
@@ -70,14 +69,14 @@ services:
       
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_EXTRA_ARGS=--advertise-exit-node --login-server=${TS_LOGIN_SERVER}
-      - TS_HOSTNAME=proton-exit-node
+      - TS_HOSTNAME=${VPN_INSTANCE_NAME:-proton}-exit-node
       - TS_ACCEPT_DNS=false
     restart: always
 
   # 3. Sidecar Manager (Monitors Load & Health)
   vpn-manager:
     build: .
-    container_name: vpn-manager
+    container_name: ${VPN_INSTANCE_NAME:-proton}-manager
     environment:
       - TARGET_CITIES=${TARGET_CITIES:-San Jose}
       - TARGET_COUNTRY=${TARGET_COUNTRY}
@@ -86,8 +85,12 @@ services:
       # Auth credentials for Proton API
       - PROTON_USERNAME=${PROTON_USERNAME}
       - PROTON_PASSWORD=${PROTON_PASSWORD}
-      # Docker Compose Project Name (Must match directory name to avoid conflicts)
-      - COMPOSE_PROJECT_NAME=tailscale-proton
+      
+      # Docker Compose Control
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-tailscale-proton}
+      - GLUETUN_CONTAINER_NAME=${VPN_INSTANCE_NAME:-proton}-gluetun
+      - GLUETUN_SERVICE_NAME=gluetun
+      - ENV_FILE_PATH=/project/${ENV_FILE_NAME:-.env}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Check/Restart containers
       - .:/project # Access to .env file
