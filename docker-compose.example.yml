@@ -1,0 +1,98 @@
+services:
+  # 0. Network Anchor (Holds the namespace and ports)
+  network-anchor:
+    image: alpine:latest
+    container_name: proton-network-anchor
+    command: tail -f /dev/null
+    ports:
+      - 8000:8000/tcp # Gluetun Control
+    restart: always
+
+  # 1. The Gateway (Gluetun + ProtonVPN)
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    network_mode: service:network-anchor
+    depends_on:
+      - network-anchor
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    environment:
+      # Provider Config - Switched to CUSTOM to use IP/Key directly
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      
+      # Connection Details (Managed by Sidecar)
+      - WIREGUARD_ENDPOINT_IP=${WIREGUARD_ENDPOINT_IP}
+      - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT}
+      - WIREGUARD_PUBLIC_KEY=${WIREGUARD_PUBLIC_KEY}
+      
+      # Authentication (From your Proton config)
+      # You must generate a WireGuard configuration from ProtonVPN dashboard
+      # and set these values in your .env file or hardcode them here.
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-10.2.0.2/32}
+      
+      # DNS & Firewall
+      - DNS_SERVER=on
+      - BLOCK_MALICIOUS=on
+      - BLOCK_SURVEILLANCE=on
+      - BLOCK_ADS=on
+      - DNS_UPSTREAM_RESOLVERS=cloudflare,google
+      
+      # IMPORTANT: Force safe MTU to prevent connection instability
+      - WIREGUARD_MTU=1280
+    volumes:
+      - gluetun-data:/gluetun
+    restart: always
+
+  # 2. The Exit Node (Tailscale + Headscale)
+  tailscale-vpn:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-proton-exit
+    network_mode: service:network-anchor # Routes all traffic through Anchor
+    depends_on:
+      - network-anchor
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - ./tailscale-data:/var/lib/tailscale # Persist state (login)
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Auth Key from your Headscale/Tailscale server
+      # Generate a REUSABLE key so the container can survive recreates
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_EXTRA_ARGS=--advertise-exit-node --login-server=${TS_LOGIN_SERVER}
+      - TS_HOSTNAME=proton-exit-node
+      - TS_ACCEPT_DNS=false
+    restart: always
+
+  # 3. Sidecar Manager (Monitors Load & Health)
+  vpn-manager:
+    build: .
+    container_name: vpn-manager
+    environment:
+      - TARGET_CITIES=${TARGET_CITIES:-San Jose}
+      - TARGET_COUNTRY=${TARGET_COUNTRY}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
+      - LOAD_CHECK_INTERVAL=${LOAD_CHECK_INTERVAL:-900}
+      # Auth credentials for Proton API
+      - PROTON_USERNAME=${PROTON_USERNAME}
+      - PROTON_PASSWORD=${PROTON_PASSWORD}
+      # Docker Compose Project Name (Must match directory name to avoid conflicts)
+      - COMPOSE_PROJECT_NAME=tailscale-proton
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Check/Restart containers
+      - .:/project # Access to .env file
+      - ./proton-session:/data # Persist session cache
+    restart: always
+
+volumes:
+  gluetun-data:
