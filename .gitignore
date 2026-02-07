@@ -1,15 +1,10 @@
 # Data directories
 proton-session/
 tailscale-data/
-proton_session_local.json
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-*.so
+# Go
+manager
+go-manager/manager
 
 # Environment variables
 .env

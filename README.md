@@ -3,7 +3,7 @@
 This project provides a self-healing, load-balancing VPN gateway using:
 1.  **Gluetun**: Connects to ProtonVPN (WireGuard).
 2.  **Tailscale/Headscale**: Acts as an exit node, routing traffic through the VPN.
-3.  **Sidecar Manager**: A custom Python agent that monitors server load/health, automatically switches to the best Proton server, and updates the connection without killing the Tailscale tunnel.
+3.  **Sidecar Manager**: A custom Go agent that monitors server load/health, automatically switches to the best Proton server, and updates the connection without killing the Tailscale tunnel.
 
 ## Architecture
 
@@ -78,9 +78,9 @@ docker compose up -d
 ### List Available Cities
 To see which cities are available and their current load:
 ```bash
-docker compose run --rm vpn-manager python manager.py --list-cities
+docker compose run --rm vpn-manager ./manager --list-cities
 # Or filter by country
-docker compose run --rm vpn-manager python manager.py --list-cities --country US
+docker compose run --rm vpn-manager ./manager --list-cities --country US
 ```
 
 ### Manual Server Switch

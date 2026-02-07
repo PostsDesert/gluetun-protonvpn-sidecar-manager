@@ -1,58 +1,44 @@
-FROM python:3.11-slim AS builder
+# Stage 1: Build the Manager
+FROM golang:1.25.7-alpine AS builder
 
-# Install system dependencies for building
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    git \
-    gcc \
-    libc-dev \
-    libffi-dev \
-    gnupg \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+# Install git for fetching dependencies and upx for compression
+# We also install docker-cli and docker-cli-compose here to copy them later
+# This avoids pulling from external images that might flake
+RUN apk add --no-cache git upx docker-cli docker-cli-compose
 
-# Install uv
-RUN pip install uv
+COPY go-manager /app/go-manager
+WORKDIR /app/go-manager
+
+RUN go mod download && go mod tidy
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/manager main.go
+
+# Compress binaries
+# We copy the docker binaries to a temp location to compress them safely
+# Use --lzma for good ratio, but avoid --best to keep build time reasonable
+RUN cp /usr/bin/docker /tmp/docker && \
+    cp /usr/libexec/docker/cli-plugins/docker-compose /tmp/docker-compose && \
+    upx --lzma /app/manager && \
+    upx --lzma /tmp/docker && \
+    upx --lzma /tmp/docker-compose
+
+# Stage 2: Final Runtime Image
+FROM alpine:3.19
+
+# Install minimal runtime dependencies (only CA certs needed)
+# docker-cli-compose is a plugin, so we need to place it correctly
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-# Create a virtual environment
-RUN uv venv
+# Copy compressed binaries
+COPY --from=builder /app/manager /app/manager
+COPY --from=builder /tmp/docker /usr/local/bin/docker
+# Docker Compose v2 expects the plugin at this location
+COPY --from=builder /tmp/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Copy dependencies
-COPY pyproject.toml .
+# Create symlink for convenience if user wants to run `docker-compose` directly
+RUN ln -s /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
 
-# Install dependencies using uv
-# We add build isolation settings via pyproject.toml now
-RUN uv pip install -r pyproject.toml
-
-# Final stage
-FROM python:3.11-slim
-
-# Install system dependencies for runtime
-# - docker.io: For restarting sibling containers
-# - gnupg: Required by proton-python-client
-# - curl: To download docker-compose
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    docker.io \
-    gnupg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install docker-compose
-RUN curl -L "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose && \
-    chmod +x /usr/local/bin/docker-compose
-
-WORKDIR /app
-
-# Copy virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
-
-# Activate virtual environment in path
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Copy script
-COPY manager.py .
-
-# Run unbuffered
-CMD ["python", "-u", "manager.py"]
+# Run command
+CMD ["/app/manager"]
