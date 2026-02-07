@@ -45,6 +45,7 @@ services:
       - DNS_UPSTREAM_RESOLVERS=cloudflare,google
       
       # IMPORTANT: Force safe MTU to prevent connection instability
+      - WIREGUARD_MTU=1280  
     volumes:
       - gluetun-data:/gluetun
     restart: always
@@ -71,6 +72,8 @@ services:
       - TS_EXTRA_ARGS=--advertise-exit-node --login-server=${TS_LOGIN_SERVER}
       - TS_HOSTNAME=${VPN_INSTANCE_NAME:-proton}-exit-node
       - TS_ACCEPT_DNS=false
+      # Force Kernel Networking Mode for better performance
+      - TS_USERSPACE=false
     restart: always
 
   # 3. Sidecar Manager (Monitors Load & Health)
@@ -96,6 +99,34 @@ services:
       - .:/project # Access to .env file
       - ./proton-session:/data # Persist session cache
     restart: always
+
+  # 4. Network Configurator (Fixes routing & firewall for Tailscale <-> Gluetun)
+  configurator:
+    image: alpine:latest
+    container_name: ${VPN_INSTANCE_NAME:-proton}-configurator
+    network_mode: service:network-anchor
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - tailscale-vpn
+    command: >
+      sh -c "apk add --no-cache iptables iproute2 &&
+      echo 'Waiting for interfaces...' &&
+      while ! ip link show tun0 >/dev/null 2>&1; do sleep 1; done &&
+      while ! ip link show tailscale0 >/dev/null 2>&1; do sleep 1; done &&
+      echo 'Applying routing fixes...' &&
+      ip rule add to 100.64.0.0/10 lookup 52 priority 98 || true &&
+      ip rule add from 100.64.0.0/10 lookup 51820 priority 102 || true &&
+      echo 'Applying firewall rules...' &&
+      iptables -I FORWARD 1 -i tailscale0 -o tun0 -j ACCEPT &&
+      iptables -I FORWARD 1 -i tun0 -o tailscale0 -m state --state RELATED,ESTABLISHED -j ACCEPT &&
+      iptables -t nat -I POSTROUTING 1 -o tun0 -j MASQUERADE &&
+      iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu &&
+      echo 'Applying buffer tuning...' &&
+      sysctl -w net.core.rmem_max=2500000 || true &&
+      sysctl -w net.core.wmem_max=2500000 || true &&
+      echo 'Network configured successfully!'"
+    restart: on-failure
 
 volumes:
   gluetun-data:

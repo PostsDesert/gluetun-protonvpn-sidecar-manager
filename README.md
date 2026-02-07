@@ -13,6 +13,7 @@ To ensure zero-downtime for the Tailscale node during VPN server switches, this 
 *   **`gluetun`**: Joins the anchor's network. It can be restarted freely to change servers.
 *   **`tailscale-vpn`**: Joins the anchor's network. It stays running even if Gluetun restarts.
 *   **`vpn-manager`**: Monitors the connection. If the server is overloaded or down, it fetches a new configuration from the Proton API, updates the `.env` file, and recreates the `gluetun` container.
+*   **`configurator`**: A tiny ephemeral container that applies critical routing rules, firewall NAT, and performance tuning (MSS Clamping) on every startup. This ensures the Tailscale -> Gluetun routing works correctly in high-performance Kernel mode.
 
 ## Prerequisites
 
@@ -88,3 +89,27 @@ If you want to force a switch immediately, you can restart the manager container
 ```bash
 docker compose restart vpn-manager
 ```
+
+## Performance Optimization (Advanced)
+
+For users seeking maximum throughput (especially on high-speed connections or hybrid CPUs), consider the following optimizations.
+
+### 1. CPU Pinning (Hybrid Architectures)
+If you are running on an Intel 12th Gen+ (Alder Lake) or similar hybrid CPU with Performance (P) and Efficiency (E) cores, the VPN containers may be scheduled on slow E-cores, significantly degrading speed.
+
+To fix this, edit your `docker-compose.yml` and add the `cpuset` directive to both `gluetun` and `tailscale-vpn` services, pinning them to your P-Cores (e.g., 0-11):
+
+```yaml
+  gluetun:
+    # ...
+    cpuset: "0-11"  # Replace with your P-Core IDs
+```
+
+```
+
+### 2. Network Tuning (Applied Automatically)
+The stack includes a `configurator` service that automatically applies:
+*   **MSS Clamping**: Prevents TCP fragmentation issues common in double-VPN setups.
+*   **Routing Fixes**: Ensures correct routing between Tailscale and ProtonVPN interfaces.
+*   **NAT Masquerading**: Enables internet access for connected clients.
+*   **UDP Buffer Tuning**: Increases `rmem`/`wmem` to 2.5MB to handle bursty WireGuard traffic.
