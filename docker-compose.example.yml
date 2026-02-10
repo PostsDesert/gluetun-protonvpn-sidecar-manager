@@ -114,19 +114,40 @@ services:
       echo 'Waiting for interfaces...' &&
       while ! ip link show tun0 >/dev/null 2>&1; do sleep 1; done &&
       while ! ip link show tailscale0 >/dev/null 2>&1; do sleep 1; done &&
-      echo 'Applying routing fixes...' &&
-      ip rule add to 100.64.0.0/10 lookup 52 priority 98 || true &&
-      ip rule add from 100.64.0.0/10 lookup 51820 priority 102 || true &&
-      echo 'Applying firewall rules...' &&
-      iptables -I FORWARD 1 -i tailscale0 -o tun0 -j ACCEPT &&
-      iptables -I FORWARD 1 -i tun0 -o tailscale0 -m state --state RELATED,ESTABLISHED -j ACCEPT &&
-      iptables -t nat -I POSTROUTING 1 -o tun0 -j MASQUERADE &&
-      iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu &&
-      echo 'Applying buffer tuning...' &&
-      sysctl -w net.core.rmem_max=2500000 || true &&
-      sysctl -w net.core.wmem_max=2500000 || true &&
-      echo 'Network configured successfully!'"
-    restart: on-failure
+      
+      apply_rules() {
+        echo 'Applying routing fixes...'
+        ip rule add to 100.64.0.0/10 lookup 52 priority 98 2>/dev/null || true
+        ip rule add from 100.64.0.0/10 lookup 51820 priority 102 2>/dev/null || true
+        
+        echo 'Applying firewall rules...'
+        # Clear existing rules to prevent duplicates
+        iptables -D FORWARD -i tailscale0 -o tun0 -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -i tun0 -o tailscale0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -o tun0 -j MASQUERADE 2>/dev/null || true
+        iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
+        
+        # Apply new rules
+        iptables -I FORWARD 1 -i tailscale0 -o tun0 -j ACCEPT
+        iptables -I FORWARD 1 -i tun0 -o tailscale0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables -t nat -I POSTROUTING 1 -o tun0 -j MASQUERADE
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+      }
+      
+      apply_rules
+      
+      echo 'Network configured successfully! Entering monitoring loop...'
+      while true; do
+        # Re-apply if tun0 disappears and comes back (Gluetun restart)
+        if ! ip link show tun0 >/dev/null 2>&1; then
+          echo 'tun0 lost! Waiting for it to return...'
+          while ! ip link show tun0 >/dev/null 2>&1; do sleep 1; done
+          echo 'tun0 returned. Re-applying rules...'
+          apply_rules
+        fi
+        sleep 10
+      done"
+    restart: always
 
 volumes:
   gluetun-data:
